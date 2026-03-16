@@ -1,0 +1,4 @@
+{
+  "ignorePaths": ["ignored/"],
+  "ignoreRules": ["net.fetch", "shell.exec_generic"]
+}

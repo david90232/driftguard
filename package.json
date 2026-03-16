@@ -1,0 +1,16 @@
+{
+  "name": "driftguard",
+  "version": "0.1.0",
+  "description": "Local-first integrity and drift scanner for repos and skills",
+  "type": "commonjs",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "scan": "node ./src/cli.js scan",
+    "scan:fixtures": "node ./scripts/run-fixtures.js",
+    "test": "node --test"
+  }
+}

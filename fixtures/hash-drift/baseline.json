@@ -1,0 +1,9 @@
+{
+  "version": "1.1",
+  "createdAt": "2025-01-01T00:00:00.000Z",
+  "rootPath": "fixtures/hash-drift",
+  "hashes": {
+    "script.js": "99445d1313537ecb7625d560c8d5c4d4af777ad1c385e6dfcd1ade4f069f1dd3",
+    "removed.txt": "4b9f2c32577beb1ebc8ab2a1e226faaa9176a81cd4eedbaa22f8a0db919972b5"
+  }
+}
