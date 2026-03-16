@@ -98,3 +98,19 @@ test("generic exec findings are low confidence and unscored", () => {
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("template literal interpolations are scanned for exec usage", () => {
+  const dir = makeTempDir();
+  const filePath = path.join(dir, "templated.js");
+  fs.writeFileSync(
+    filePath,
+    "function exec(cmd) { return cmd; }\nconst out = `${exec('echo hi')}`;\n"
+  );
+
+  const report = scanPath(dir, { basePath: dir });
+  const ruleIds = report.findings.map((finding) => finding.ruleId);
+
+  assert.ok(ruleIds.includes("shell.exec_generic"));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

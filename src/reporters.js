@@ -175,8 +175,86 @@ function buildVerdict(report) {
 }
 
 function attachVerdict(report) {
+  report.trust = buildTrustSummary(report);
   report.verdict = buildVerdict(report);
   return report;
+}
+
+function buildTrustSummary(report) {
+  if (!report || !report.drift) return null;
+  const highlights = report.drift.highlights || {};
+  const reasons = [];
+  const notes = [];
+  const baselineVersion = report.drift.baselineVersion || null;
+  const currentVersion = report.version || null;
+  const versionMismatch =
+    baselineVersion && currentVersion && baselineVersion !== currentVersion;
+
+  if (report.drift.rootMismatch) reasons.push("Baseline root mismatch.");
+  if (report.drift.configChanged) reasons.push("Baseline config changed.");
+  if (versionMismatch) reasons.push("Baseline version mismatch.");
+  if (highlights.newCapabilities && highlights.newCapabilities.length) {
+    reasons.push(...highlights.newCapabilities);
+  }
+  if (highlights.dependencyChanges && highlights.dependencyChanges.length) {
+    reasons.push("Dependency changes detected.");
+  }
+  if (
+    highlights.installHooks &&
+    (highlights.installHooks.added.length || highlights.installHooks.removed.length)
+  ) {
+    reasons.push("Install hooks changed.");
+  }
+  if (highlights.notes && highlights.notes.length) {
+    notes.push(...highlights.notes);
+  }
+
+  const symlinkDrift = report.drift.symlinks;
+  const driftCount =
+    report.drift.added.length +
+    report.drift.removed.length +
+    report.drift.changed.length +
+    (symlinkDrift
+      ? symlinkDrift.added.length + symlinkDrift.removed.length + symlinkDrift.changed.length
+      : 0);
+
+  let recommendation = "review";
+  if (report.drift.rootMismatch || report.drift.configChanged) {
+    recommendation = "do-not-trust";
+  } else if (driftCount === 0) {
+    recommendation = "safe-to-trust";
+  } else if (
+    (highlights.newCapabilities && highlights.newCapabilities.length) ||
+    (highlights.installHooks && highlights.installHooks.added.length)
+  ) {
+    recommendation = "do-not-trust";
+  }
+
+  if (report.drift.trustMode === "all-findings" && recommendation === "safe-to-trust") {
+    recommendation = "review";
+  }
+
+  const label =
+    recommendation === "safe-to-trust"
+      ? "SAFE TO TRUST"
+      : recommendation === "do-not-trust"
+        ? "DO NOT TRUST"
+        : "REVIEW";
+
+  const summary =
+    recommendation === "safe-to-trust"
+      ? "No new drift detected; baseline remains trusted."
+      : recommendation === "do-not-trust"
+        ? "High-risk drift detected; do not refresh the baseline yet."
+        : "Drift detected; review changes before trusting.";
+
+  return {
+    recommendation,
+    label,
+    summary,
+    reasons: Array.from(new Set(reasons)),
+    notes: Array.from(new Set(notes))
+  };
 }
 
 function renderMarkdown(report) {
@@ -189,7 +267,24 @@ function renderMarkdown(report) {
   lines.push(`- Overall Risk: ${report.risk.level.toUpperCase()} (score ${report.risk.score})`);
   lines.push(`- Findings: ${report.stats.findings}`);
   lines.push(`- Combo Risks: ${report.stats.comboFindings || 0}`);
+  if (report.trust && report.verdict.mode === "compare") {
+    lines.push(`- Trust Recommendation: ${report.trust.label}`);
+  }
   lines.push("");
+
+  if (report.trust && report.verdict.mode === "compare") {
+    lines.push("## Trust Summary");
+    lines.push("");
+    lines.push(`- Recommendation: ${report.trust.label}`);
+    lines.push(`- Summary: ${report.trust.summary}`);
+    if (report.trust.reasons.length) {
+      lines.push(`- Reasons: ${report.trust.reasons.join("; ")}`);
+    }
+    if (report.trust.notes.length) {
+      lines.push(`- Notes: ${report.trust.notes.join("; ")}`);
+    }
+    lines.push("");
+  }
 
   lines.push("## Verdict");
   lines.push("");
@@ -262,6 +357,27 @@ function renderMarkdown(report) {
       lines.push(`- Symlink adds: ${report.drift.symlinks.added.length}`);
       lines.push(`- Symlink removes: ${report.drift.symlinks.removed.length}`);
       lines.push(`- Symlink changes: ${report.drift.symlinks.changed.length}`);
+    }
+    if (report.drift.highlights) {
+      const highlights = report.drift.highlights;
+      if (highlights.newCapabilities && highlights.newCapabilities.length) {
+        lines.push(`- New capability signals: ${highlights.newCapabilities.join("; ")}`);
+      }
+      if (highlights.dependencyChanges && highlights.dependencyChanges.length) {
+        lines.push(`- Dependency changes: ${highlights.dependencyChanges.join("; ")}`);
+      }
+      if (highlights.installHooks) {
+        if (highlights.installHooks.added.length) {
+          lines.push(
+            `- New install hooks: ${highlights.installHooks.added.join(", ")}`
+          );
+        }
+        if (highlights.installHooks.removed.length) {
+          lines.push(
+            `- Removed install hooks: ${highlights.installHooks.removed.join(", ")}`
+          );
+        }
+      }
     }
     lines.push("");
     renderDriftList(lines, "Added files", report.drift.added);
@@ -387,6 +503,12 @@ function printSummary(report) {
   lines.push(`Root: ${report.rootPath}`);
   lines.push(`Overall Risk: ${report.risk.level.toUpperCase()} (score ${report.risk.score})`);
   lines.push(`Findings: ${report.stats.findings}`);
+  if (report.trust && report.verdict.mode === "compare") {
+    lines.push(`Trust Recommendation: ${report.trust.label}`);
+    if (report.trust.reasons.length) {
+      lines.push(`Trust Reasons: ${report.trust.reasons.join("; ")}`);
+    }
+  }
   if (report.stats.symlinks !== undefined) {
     lines.push(`Symlinks: ${report.stats.symlinks}`);
   }

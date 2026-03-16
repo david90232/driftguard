@@ -97,7 +97,7 @@ node ./scripts/run-fixtures.js
 - Symlinks are never followed; their paths and targets are tracked for integrity/drift.
 - Prompt files (`SKILL.md`, `SOUL.md`, `MEMORY.md`) are scanned for prompt-injection patterns only.
 - Documentation files (`.md`, `.txt`, etc.) only surface prompt-injection patterns and are marked unscored to avoid treating docs as executable code.
-- Code scanning ignores string literals to reduce false positives from embedded examples/help text, except `package.json` scripts which are scanned verbatim to catch risky install hooks.
+- Code scanning ignores string literals to reduce false positives from embedded examples/help text. Template literal interpolations are still scanned, and `package.json` scripts are scanned verbatim to catch risky install hooks.
 - Add more rules in `src/rules.js` to extend coverage.
 
 ## Minimal References

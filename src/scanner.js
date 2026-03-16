@@ -427,8 +427,17 @@ function stripCommentsForScan(line, state, options = {}) {
     value = value.slice(0, startIdx) + value.slice(endIdx + 2);
   }
 
-  const slashIdx = value.indexOf("//");
-  let cutIdx = slashIdx !== -1 ? slashIdx : -1;
+  let cutIdx = -1;
+  let slashIdx = value.indexOf("//");
+  while (slashIdx !== -1) {
+    const isHttp = value.slice(Math.max(0, slashIdx - 5), slashIdx + 2) === "http://";
+    const isHttps = value.slice(Math.max(0, slashIdx - 6), slashIdx + 2) === "https://";
+    if (!isHttp && !isHttps) {
+      cutIdx = slashIdx;
+      break;
+    }
+    slashIdx = value.indexOf("//", slashIdx + 2);
+  }
   if (options.allowHashComments) {
     const hashIdx = value.indexOf("#");
     if (hashIdx !== -1 && (cutIdx === -1 || hashIdx < cutIdx)) cutIdx = hashIdx;
@@ -488,32 +497,55 @@ function stripStringLiterals(line) {
   let inSingle = false;
   let inDouble = false;
   let inTemplate = false;
+  let templateExprDepth = 0;
   let escaped = false;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (escaped) {
       escaped = false;
-      if (!inSingle && !inDouble && !inTemplate) out += ch;
+      if (!inSingle && !inDouble && (!inTemplate || templateExprDepth > 0)) out += ch;
       continue;
     }
     if (ch === "\\") {
       escaped = true;
-      if (!inSingle && !inDouble && !inTemplate) out += ch;
+      if (!inSingle && !inDouble && (!inTemplate || templateExprDepth > 0)) out += ch;
       continue;
     }
-    if (!inDouble && !inTemplate && ch === "'") {
+    if (!inDouble && (!inTemplate || templateExprDepth > 0) && ch === "'") {
       inSingle = !inSingle;
       continue;
     }
-    if (!inSingle && !inTemplate && ch === "\"") {
+    if (!inSingle && (!inTemplate || templateExprDepth > 0) && ch === "\"") {
       inDouble = !inDouble;
       continue;
     }
     if (!inSingle && !inDouble && ch === "`") {
-      inTemplate = !inTemplate;
+      if (inTemplate && templateExprDepth === 0) {
+        inTemplate = false;
+        continue;
+      }
+      if (!inTemplate) {
+        inTemplate = true;
+        continue;
+      }
+    }
+    if (inTemplate && templateExprDepth === 0) {
+      if (ch === "$" && line[i + 1] === "{") {
+        templateExprDepth = 1;
+        i += 1;
+        out += " ";
+      }
       continue;
     }
-    if (!inSingle && !inDouble && !inTemplate) {
+    if (inTemplate && templateExprDepth > 0 && !inSingle && !inDouble) {
+      if (ch === "{") {
+        templateExprDepth += 1;
+      } else if (ch === "}") {
+        templateExprDepth -= 1;
+        if (templateExprDepth === 0) continue;
+      }
+    }
+    if (!inSingle && !inDouble && (!inTemplate || templateExprDepth > 0)) {
       out += ch;
     }
   }
@@ -642,15 +674,60 @@ function walkDir(
   }
 }
 
+const LIFECYCLE_SCRIPTS = new Set([
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepublish",
+  "prepublishOnly",
+  "prepare",
+  "postprepare",
+  "prepack",
+  "postpack",
+  "pretest",
+  "test",
+  "posttest"
+]);
+
+const INSTALL_HOOK_SCRIPTS = new Set([
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepublish",
+  "prepublishOnly",
+  "prepare"
+]);
+
+function normalizeScriptKeys(scripts) {
+  if (!scripts || typeof scripts !== "object") return [];
+  return Object.keys(scripts).filter((key) => typeof key === "string");
+}
+
+function formatDependencyEntries(dependencies) {
+  if (!dependencies || typeof dependencies !== "object") return [];
+  return Object.entries(dependencies).map(([name, version]) => {
+    if (!version) return String(name);
+    return `${name}@${version}`;
+  });
+}
+
 function parsePackageJson(filePath) {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const json = JSON.parse(raw);
+    const scriptKeys = normalizeScriptKeys(json.scripts);
+    const lifecycleScripts = scriptKeys.filter((key) => LIFECYCLE_SCRIPTS.has(key));
+    const installScripts = scriptKeys.filter((key) => INSTALL_HOOK_SCRIPTS.has(key));
     return {
       name: json.name || null,
       version: json.version || null,
-      dependencies: Object.keys(json.dependencies || {}),
-      devDependencies: Object.keys(json.devDependencies || {})
+      dependencies: uniqueStrings(formatDependencyEntries(json.dependencies)),
+      devDependencies: uniqueStrings(formatDependencyEntries(json.devDependencies)),
+      optionalDependencies: uniqueStrings(formatDependencyEntries(json.optionalDependencies)),
+      peerDependencies: uniqueStrings(formatDependencyEntries(json.peerDependencies)),
+      scripts: uniqueStrings(scriptKeys),
+      lifecycleScripts: uniqueStrings(lifecycleScripts),
+      installScripts: uniqueStrings(installScripts)
     };
   } catch (err) {
     return { error: "Failed to parse package.json" };
@@ -1085,6 +1162,7 @@ function saveBaseline(filePath, report) {
     rootId,
     rootRealPath: report.meta ? report.meta.rootPath : null,
     config: report.config || { ignorePaths: [], ignoreRules: [] },
+    manifests: report.manifests || {},
     hashes: report.hashes,
     symlinks: report.symlinks || []
   };

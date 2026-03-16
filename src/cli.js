@@ -152,6 +152,190 @@ function riskRank(level) {
   return index === -1 ? 0 : index;
 }
 
+function normalizeStringList(values) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean))).sort();
+}
+
+function diffStringLists(currentList, baselineList) {
+  const current = new Set(normalizeStringList(currentList));
+  const baseline = new Set(normalizeStringList(baselineList));
+  const added = [];
+  const removed = [];
+  for (const item of current) {
+    if (!baseline.has(item)) added.push(item);
+  }
+  for (const item of baseline) {
+    if (!current.has(item)) removed.push(item);
+  }
+  return { added, removed };
+}
+
+function addDiffIfChanged(target, key, diff) {
+  if (!diff) return;
+  if (diff.added.length || diff.removed.length) {
+    target[key] = diff;
+  }
+}
+
+function buildManifestDrift(currentManifests, baselineManifests) {
+  const drift = {};
+  const currentPkg = currentManifests ? currentManifests.packageJson : null;
+  const baselinePkg = baselineManifests ? baselineManifests.packageJson : null;
+
+  if (currentPkg || baselinePkg) {
+    const pkgDrift = {};
+    addDiffIfChanged(
+      pkgDrift,
+      "dependencies",
+      diffStringLists(currentPkg && currentPkg.dependencies, baselinePkg && baselinePkg.dependencies)
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "devDependencies",
+      diffStringLists(
+        currentPkg && currentPkg.devDependencies,
+        baselinePkg && baselinePkg.devDependencies
+      )
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "optionalDependencies",
+      diffStringLists(
+        currentPkg && currentPkg.optionalDependencies,
+        baselinePkg && baselinePkg.optionalDependencies
+      )
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "peerDependencies",
+      diffStringLists(
+        currentPkg && currentPkg.peerDependencies,
+        baselinePkg && baselinePkg.peerDependencies
+      )
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "scripts",
+      diffStringLists(currentPkg && currentPkg.scripts, baselinePkg && baselinePkg.scripts)
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "lifecycleScripts",
+      diffStringLists(
+        currentPkg && currentPkg.lifecycleScripts,
+        baselinePkg && baselinePkg.lifecycleScripts
+      )
+    );
+    addDiffIfChanged(
+      pkgDrift,
+      "installScripts",
+      diffStringLists(
+        currentPkg && currentPkg.installScripts,
+        baselinePkg && baselinePkg.installScripts
+      )
+    );
+    if (Object.keys(pkgDrift).length) {
+      drift.packageJson = pkgDrift;
+    }
+  }
+
+  const currentReq = currentManifests ? currentManifests.requirements : null;
+  const baselineReq = baselineManifests ? baselineManifests.requirements : null;
+  if (currentReq || baselineReq) {
+    const reqDrift = {};
+    addDiffIfChanged(
+      reqDrift,
+      "dependencies",
+      diffStringLists(
+        currentReq && currentReq.dependencies,
+        baselineReq && baselineReq.dependencies
+      )
+    );
+    if (Object.keys(reqDrift).length) drift.requirements = reqDrift;
+  }
+
+  const currentPy = currentManifests ? currentManifests.pyproject : null;
+  const baselinePy = baselineManifests ? baselineManifests.pyproject : null;
+  if (currentPy || baselinePy) {
+    const pyDrift = {};
+    addDiffIfChanged(
+      pyDrift,
+      "dependencies",
+      diffStringLists(
+        currentPy && currentPy.dependencies,
+        baselinePy && baselinePy.dependencies
+      )
+    );
+    if (Object.keys(pyDrift).length) drift.pyproject = pyDrift;
+  }
+
+  return drift;
+}
+
+function buildDriftHighlights(report, manifestDrift, hasBaselineManifests) {
+  const highlights = {
+    newCapabilities: [],
+    installHooks: { added: [], removed: [] },
+    dependencyChanges: [],
+    notes: []
+  };
+
+  if (!report || !report.drift) return highlights;
+
+  if (report.drift.trustMode === "all-findings") {
+    highlights.notes.push("Baseline mismatch; treating all findings as new.");
+  }
+  if (!hasBaselineManifests) {
+    highlights.notes.push("Baseline missing manifest data; dependency drift not available.");
+  }
+
+  const scored = report.findings.filter((finding) => finding.scored !== false);
+  const hasRulePrefix = (prefix) =>
+    scored.some((finding) => finding.ruleId && finding.ruleId.startsWith(prefix));
+
+  if (hasRulePrefix("shell.")) highlights.newCapabilities.push("New executable behavior detected.");
+  if (hasRulePrefix("net.")) highlights.newCapabilities.push("New network capability detected.");
+
+  if (report.drift.symlinks && report.drift.symlinks.added.length) {
+    highlights.newCapabilities.push("New symlink(s) introduced.");
+  }
+
+  if (manifestDrift && manifestDrift.packageJson && manifestDrift.packageJson.installScripts) {
+    const install = manifestDrift.packageJson.installScripts;
+    highlights.installHooks = install;
+    if (install.added.length) {
+      highlights.newCapabilities.push("New install hook(s) added in package.json.");
+    }
+  }
+
+  if (manifestDrift) {
+    const depChanges = [];
+    const pkg = manifestDrift.packageJson;
+    if (pkg) {
+      for (const key of [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ]) {
+        if (pkg[key] && (pkg[key].added.length || pkg[key].removed.length)) {
+          depChanges.push(`package.json ${key}`);
+        }
+      }
+    }
+    if (manifestDrift.requirements && manifestDrift.requirements.dependencies) {
+      depChanges.push("requirements.txt dependencies");
+    }
+    if (manifestDrift.pyproject && manifestDrift.pyproject.dependencies) {
+      depChanges.push("pyproject.toml dependencies");
+    }
+    highlights.dependencyChanges = depChanges;
+  }
+
+  return highlights;
+}
+
 function ensurePathExists(label, filePath) {
   if (!fs.existsSync(filePath)) {
     console.error(`${label} does not exist: ${filePath}`);
@@ -400,10 +584,15 @@ function runCompare(rootPath, options) {
   );
   const drift = compareHashes(report.hashes, baseline.hashes);
   const symlinkDrift = compareSymlinks(report.symlinks, baseline.symlinks);
+  const hasBaselineManifests = Object.prototype.hasOwnProperty.call(baseline, "manifests");
+  const manifestDrift = hasBaselineManifests
+    ? buildManifestDrift(report.manifests, baseline.manifests)
+    : null;
   report.drift = {
     baselinePath: path.relative(process.cwd(), baselinePath),
     ...drift,
-    symlinks: symlinkDrift
+    symlinks: symlinkDrift,
+    manifests: manifestDrift
   };
 
   const baselineConfig = baseline.config || { ignorePaths: [], ignoreRules: [] };
@@ -484,6 +673,12 @@ function runCompare(rootPath, options) {
       report.findings.filter((finding) => finding.scored === false).length;
     report.stats.trustedFindings = 0;
   }
+
+  report.drift.highlights = buildDriftHighlights(
+    report,
+    manifestDrift,
+    hasBaselineManifests
+  );
 
   attachVerdict(report);
 
