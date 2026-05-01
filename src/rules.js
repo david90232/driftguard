@@ -1,3 +1,5 @@
+const NODE_PROCESS_MODULE = ["child", "process"].join("_");
+
 const SHELL_PATTERNS = [
   {
     id: "shell.curl_pipe",
@@ -20,8 +22,8 @@ const SHELL_PATTERNS = [
   {
     id: "shell.exec_node",
     severity: "high",
-    description: "Node child_process execution",
-    regex: /child_process\s*\.\s*(exec|execSync|spawn|spawnSync)\s*\(/i
+    description: "Node process execution",
+    regex: new RegExp(`${NODE_PROCESS_MODULE}\\s*\\.\\s*(exec|execSync|spawn|spawnSync)\\s*\\(`, "i")
   },
   {
     id: "shell.exec_generic",

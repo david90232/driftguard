@@ -66,7 +66,7 @@ Trusted baselines include approval metadata: timestamp, approver, optional note,
 git commit, package version, risk summary, and finding capability summary. Example:
 
 ```bash
-driftguard trust ./my-repo --trusted-by David --note "Reviewed before v0.2.5 publish"
+driftguard trust ./my-repo --trusted-by David --note "Reviewed before v0.2.6 publish"
 ```
 
 ## What It Detects

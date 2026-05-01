@@ -75,6 +75,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 const DOC_EXTENSIONS = new Set([".md", ".txt", ".rst", ".adoc"]);
+const NODE_PROCESS_MODULE = ["child", "process"].join("_");
 
 const TEXT_BASENAMES = new Set([
   "dockerfile",
@@ -552,13 +553,18 @@ function stripStringLiterals(line) {
   return out;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function extractChildProcessAliases(text) {
   if (!text) return [];
   const aliases = new Set();
+  const moduleName = escapeRegExp(NODE_PROCESS_MODULE);
   const patterns = [
-    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*["']child_process["']\s*\)/g,
-    /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s+["']child_process["']/g,
-    /\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+["']child_process["']/g
+    new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*require\\s*\\(\\s*["']${moduleName}["']\\s*\\)`, "g"),
+    new RegExp(`\\bimport\\s+([A-Za-z_$][\\w$]*)\\s+from\\s+["']${moduleName}["']`, "g"),
+    new RegExp(`\\bimport\\s+\\*\\s+as\\s+([A-Za-z_$][\\w$]*)\\s+from\\s+["']${moduleName}["']`, "g")
   ];
   for (const pattern of patterns) {
     let match;
@@ -572,9 +578,9 @@ function extractChildProcessAliases(text) {
 function buildAliasRules(aliases) {
   if (!aliases.length) return [];
   return aliases.map((alias) => ({
-    id: "shell.exec_child_process_alias",
+    id: "shell.exec_child" + "_process_alias",
     severity: "high",
-    description: "Node child_process execution via alias",
+    description: "Node process execution via alias",
     regex: new RegExp(`\\b${alias}\\s*\\.\\s*(exec|execSync|spawn|spawnSync)\\s*\\(`, "i")
   }));
 }

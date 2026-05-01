@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
 const {
   scanPath,
   loadConfig,
@@ -228,14 +227,61 @@ function summarizeFindings(findings) {
   return { capabilities, bySeverity, byRule };
 }
 
+function findGitMetadataPath(rootPath) {
+  let current = rootPath;
+  while (current && current !== path.dirname(current)) {
+    const candidate = path.join(current, ".git");
+    if (fs.existsSync(candidate)) return candidate;
+    current = path.dirname(current);
+  }
+  return null;
+}
+
+function resolveGitDir(gitPath) {
+  if (!gitPath) return null;
+  const stat = fs.statSync(gitPath, { throwIfNoEntry: false });
+  if (!stat) return null;
+  if (stat.isDirectory()) return gitPath;
+  if (!stat.isFile()) return null;
+  const raw = fs.readFileSync(gitPath, "utf8").trim();
+  const match = raw.match(/^gitdir:\s*(.+)$/i);
+  if (!match) return null;
+  const gitDir = match[1].trim();
+  return path.isAbsolute(gitDir) ? gitDir : path.resolve(path.dirname(gitPath), gitDir);
+}
+
+function readPackedRef(gitDir, refName) {
+  const packedRefsPath = path.join(gitDir, "packed-refs");
+  if (!fs.existsSync(packedRefsPath)) return null;
+  const lines = fs.readFileSync(packedRefsPath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    if (!line || line.startsWith("#") || line.startsWith("^")) continue;
+    const [hash, ref] = line.trim().split(/\s+/, 2);
+    if (ref === refName) return hash || null;
+  }
+  return null;
+}
+
 function getGitCommit(rootPath) {
-  const result = spawnSync("git", ["-C", rootPath, "rev-parse", "HEAD"], {
-    encoding: "utf8",
-    timeout: 3000
-  });
-  if (result.status !== 0) return null;
-  const commit = (result.stdout || "").trim();
-  return commit || null;
+  try {
+    const gitDir = resolveGitDir(findGitMetadataPath(rootPath));
+    if (!gitDir) return null;
+    const headPath = path.join(gitDir, "HEAD");
+    if (!fs.existsSync(headPath)) return null;
+    const head = fs.readFileSync(headPath, "utf8").trim();
+    if (/^[0-9a-f]{40}$/i.test(head)) return head;
+    const refMatch = head.match(/^ref:\s*(.+)$/i);
+    if (!refMatch) return null;
+    const refName = refMatch[1].trim();
+    const refPath = path.join(gitDir, ...refName.split("/"));
+    if (fs.existsSync(refPath)) {
+      const ref = fs.readFileSync(refPath, "utf8").trim();
+      return /^[0-9a-f]{40}$/i.test(ref) ? ref : null;
+    }
+    return readPackedRef(gitDir, refName);
+  } catch (err) {
+    return null;
+  }
 }
 
 function buildBaselineMeta(rootPath, report, options) {
