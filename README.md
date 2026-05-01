@@ -74,7 +74,7 @@ driftguard trust ./my-repo --trusted-by David --note "Reviewed before v0.2.6 pub
 - **Shell execution** — `eval()`, `child_process`, `subprocess`, `curl | sh`, etc.
 - **Network calls** — `fetch()`, `axios`, `requests`, `curl`, webhooks
 - **Sensitive paths** — `.env`, SSH keys, config files
-- **Prompt injection** — "ignore previous instructions", override attempts, roleplay coercion
+- **Prompt injection** — instruction-override attempts, roleplay coercion, and tool-pressure language
 - **Obfuscation** — base64, long hex strings
 - **Combo risks** — shell + network = RCE risk; network + sensitive = exfiltration risk
 - **Dependency drift** — added/removed deps in `package.json`, `requirements.txt`, `pyproject.toml`

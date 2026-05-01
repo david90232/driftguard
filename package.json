@@ -1,6 +1,6 @@
 {
   "name": "driftguard",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Local-first security drift scanner for repos and AI agent skills with trusted baselines, file hashing, dependency drift, install-hook detection, and risky capability diffs",
   "type": "commonjs",
   "license": "MIT",

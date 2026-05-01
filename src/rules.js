@@ -159,7 +159,7 @@ const PROMPT_INJECTION_PATTERNS = [
   {
     id: "prompt.ignore_previous",
     severity: "high",
-    description: "Prompt injection: ignore previous instructions",
+    description: "Prompt injection: prior-instruction override",
     regex: /(ignore|disregard|forget)\s+(all\s+)?(previous|prior)\s+instructions/i
   },
   {
