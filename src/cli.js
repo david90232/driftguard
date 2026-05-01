@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const {
   scanPath,
   loadConfig,
@@ -17,11 +18,12 @@ function toPosix(value) {
 }
 
 function printHelp() {
-  console.log(`Driftguard Integrity Scanner (v${VERSION})
+  console.log(`DriftGuard (v${VERSION}) — trust-then-verify integrity scanner
 
 Usage:
-  node ./src/cli.js scan <path> [options]
-  node ./src/cli.js compare <path> --baseline <file> [options]
+  driftguard scan <path> [options]        Scan and report findings
+  driftguard trust <path> [options]       Scan, report, and save a trusted baseline
+  driftguard compare <path> [options]     Compare current state against a trusted baseline
 
 Options:
   --out <dir>             Output directory for reports (default: ./reports)
@@ -29,17 +31,23 @@ Options:
   --md <file>             Markdown report path
   --config <file>         Config path (default: <root>/.driftguard.json)
   --save-baseline <file>  Write baseline hash file after scan
-  --baseline <file>       Baseline hash file (compare mode only)
+  --baseline <file>       Baseline hash file (compare/trust mode)
+  --trusted-by <name>     Record who approved a trusted baseline
+  --note <text>           Record an approval note on a trusted baseline
   --skills-summary        Concise summary when scanning a directory of skills
   --help, -h              Show help
 
+Workflow:
+  1. Scan a repo or skill to review findings
+  2. If acceptable, trust it to save a baseline
+  3. After changes, compare to see what drifted since trust
+
 Examples:
-  node ./src/cli.js scan ./skills
-  node ./src/cli.js scan ./skills --out ./reports
-  node ./src/cli.js scan ./skills --json ./reports/scan.json --md ./reports/scan.md
-  node ./src/cli.js scan ./skills --save-baseline ./reports/baseline.json
-  node ./src/cli.js compare ./skills --baseline ./reports/baseline.json
-  node ./src/cli.js scan ./skills --skills-summary
+  driftguard scan ./skills
+  driftguard trust ./skills
+  driftguard trust ./skills --baseline ./baselines/skills.json
+  driftguard compare ./skills --baseline ./reports/baseline.json
+  driftguard scan ./skills --skills-summary
 `);
 }
 
@@ -114,6 +122,20 @@ function parseArgs(argv) {
           i += consumed;
         }
         break;
+      case "--trusted-by":
+        {
+          const { value, consumed } = readValue(flag, inlineValue, nextValue);
+          if (value) options.trustedBy = value;
+          i += consumed;
+        }
+        break;
+      case "--note":
+        {
+          const { value, consumed } = readValue(flag, inlineValue, nextValue);
+          if (value) options.note = value;
+          i += consumed;
+        }
+        break;
       case "--skills-summary":
         options.skillsSummary = true;
         break;
@@ -176,6 +198,105 @@ function addDiffIfChanged(target, key, diff) {
   if (diff.added.length || diff.removed.length) {
     target[key] = diff;
   }
+}
+
+function collectCapabilities(findings) {
+  const capabilities = new Set();
+  if (!Array.isArray(findings)) return [];
+  for (const finding of findings) {
+    if (!finding || !finding.ruleId) continue;
+    const ruleId = String(finding.ruleId);
+    const prefix = ruleId.split(".")[0];
+    if (prefix) capabilities.add(prefix);
+  }
+  return Array.from(capabilities).sort();
+}
+
+function summarizeFindings(findings) {
+  const bySeverity = {};
+  const byRule = {};
+  const capabilities = collectCapabilities(findings);
+  if (Array.isArray(findings)) {
+    for (const finding of findings) {
+      if (!finding || finding.scored === false) continue;
+      const severity = finding.severity || "unknown";
+      const ruleId = finding.ruleId || "unknown";
+      bySeverity[severity] = (bySeverity[severity] || 0) + 1;
+      byRule[ruleId] = (byRule[ruleId] || 0) + 1;
+    }
+  }
+  return { capabilities, bySeverity, byRule };
+}
+
+function getGitCommit(rootPath) {
+  const result = spawnSync("git", ["-C", rootPath, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+    timeout: 3000
+  });
+  if (result.status !== 0) return null;
+  const commit = (result.stdout || "").trim();
+  return commit || null;
+}
+
+function buildBaselineMeta(rootPath, report, options) {
+  return {
+    approvedAt: new Date().toISOString(),
+    approvedBy: options.trustedBy || process.env.DRIFTGUARD_TRUSTED_BY || process.env.USER || null,
+    note: options.note || null,
+    gitCommit: getGitCommit(rootPath),
+    packageVersion:
+      report.manifests && report.manifests.packageJson
+        ? report.manifests.packageJson.version || null
+        : null,
+    risk: report.risk || null,
+    stats: report.stats || null,
+    findings: summarizeFindings(report.findings)
+  };
+}
+
+function buildRiskDiff(report, baseline, currentSnapshot = null) {
+  const baselineTrust = baseline.trust || {};
+  const baselineRisk = baselineTrust.risk || null;
+  const currentRisk = currentSnapshot && currentSnapshot.risk ? currentSnapshot.risk : report.risk || null;
+  const baselineStats = baselineTrust.stats || {};
+  const currentStats = currentSnapshot && currentSnapshot.stats ? currentSnapshot.stats : report.stats || {};
+  const baselineCapabilities =
+    baselineTrust.findings && Array.isArray(baselineTrust.findings.capabilities)
+      ? baselineTrust.findings.capabilities
+      : [];
+  const currentFindings =
+    currentSnapshot && Array.isArray(currentSnapshot.findings)
+      ? currentSnapshot.findings
+      : report.findings;
+  const currentCapabilities = collectCapabilities(currentFindings);
+  const capabilityDiff = diffStringLists(currentCapabilities, baselineCapabilities);
+
+  return {
+    baseline: {
+      level: baselineRisk ? baselineRisk.level : null,
+      score: baselineRisk ? baselineRisk.score : null,
+      findings: baselineStats.findings === undefined ? null : baselineStats.findings,
+      capabilities: baselineCapabilities
+    },
+    current: {
+      level: currentRisk ? currentRisk.level : null,
+      score: currentRisk ? currentRisk.score : null,
+      findings: currentStats.findings === undefined ? null : currentStats.findings,
+      capabilities: currentCapabilities
+    },
+    levelChanged:
+      Boolean(baselineRisk && currentRisk) && baselineRisk.level !== currentRisk.level,
+    scoreDelta:
+      baselineRisk && currentRisk && typeof baselineRisk.score === "number"
+        ? currentRisk.score - baselineRisk.score
+        : null,
+    findingDelta:
+      typeof baselineStats.findings === "number" && typeof currentStats.findings === "number"
+        ? currentStats.findings - baselineStats.findings
+        : null,
+    capabilities: capabilityDiff,
+    notes: baselineTrust.risk ? [] : ["Baseline missing risk metadata; run driftguard trust again after review."]
+  };
 }
 
 function buildManifestDrift(currentManifests, baselineManifests) {
@@ -293,12 +414,39 @@ function buildDriftHighlights(report, manifestDrift, hasBaselineManifests) {
   const scored = report.findings.filter((finding) => finding.scored !== false);
   const hasRulePrefix = (prefix) =>
     scored.some((finding) => finding.ruleId && finding.ruleId.startsWith(prefix));
+  const describedCapabilities = new Set();
 
-  if (hasRulePrefix("shell.")) highlights.newCapabilities.push("New executable behavior detected.");
-  if (hasRulePrefix("net.")) highlights.newCapabilities.push("New network capability detected.");
+  if (hasRulePrefix("shell.")) {
+    highlights.newCapabilities.push("New executable behavior detected.");
+    describedCapabilities.add("shell");
+  }
+  if (hasRulePrefix("net.")) {
+    highlights.newCapabilities.push("New network capability detected.");
+    describedCapabilities.add("net");
+  }
 
   if (report.drift.symlinks && report.drift.symlinks.added.length) {
     highlights.newCapabilities.push("New symlink(s) introduced.");
+  }
+
+  if (report.drift.riskDiff) {
+    const riskDiff = report.drift.riskDiff;
+    if (riskDiff.levelChanged) {
+      highlights.notes.push(
+        `Risk level changed from ${riskDiff.baseline.level || "unknown"} to ${riskDiff.current.level || "unknown"}.`
+      );
+    }
+    if (riskDiff.scoreDelta !== null && riskDiff.scoreDelta > 0) {
+      highlights.notes.push(`Risk score increased by ${riskDiff.scoreDelta}.`);
+    }
+    const extraCapabilities = riskDiff.capabilities
+      ? riskDiff.capabilities.added.filter((capability) => !describedCapabilities.has(capability))
+      : [];
+    if (extraCapabilities.length) {
+      highlights.newCapabilities.push(
+        `New capability categories: ${extraCapabilities.join(", ")}.`
+      );
+    }
   }
 
   if (manifestDrift && manifestDrift.packageJson && manifestDrift.packageJson.installScripts) {
@@ -462,7 +610,7 @@ function discoverSkillDirs(rootPath) {
 
 function renderSkillsSummary(rootPath, summaries, overall) {
   const lines = [];
-  lines.push("Driftguard Skills Summary");
+  lines.push("DriftGuard Skills Summary");
   lines.push(`Root: ${path.relative(process.cwd(), rootPath) || "."}`);
   lines.push(`Skills scanned: ${summaries.length}`);
   lines.push(
@@ -525,9 +673,18 @@ function runScan(rootPath, options) {
 
   const configResult = resolveConfig(rootPath, options.configPath);
   const runtimeIgnorePaths = collectRuntimeIgnorePaths(rootPath, options);
-  const report = attachVerdict(
-    scanPath(rootPath, prepareReportOptions(options, configResult, runtimeIgnorePaths))
-  );
+  const report = scanPath(rootPath, prepareReportOptions(options, configResult, runtimeIgnorePaths));
+
+  if (options.saveBaseline) {
+    const baselinePath = resolveOptionalPath(options.saveBaseline);
+    requireValue("--save-baseline", baselinePath);
+    const trustMeta = buildBaselineMeta(rootPath, report, options);
+    saveBaseline(baselinePath, report, trustMeta);
+    report.savedBaseline = { path: baselinePath, trust: trustMeta };
+    console.log(`Baseline saved (trusted): ${baselinePath}`);
+  }
+
+  attachVerdict(report);
 
   const outDir = resolveOptionalPath(options.outDir) || path.join(process.cwd(), "reports");
   const jsonPath = resolveOptionalPath(options.jsonFile);
@@ -538,13 +695,6 @@ function runScan(rootPath, options) {
     jsonPath,
     mdPath
   );
-
-  if (options.saveBaseline) {
-    const baselinePath = resolveOptionalPath(options.saveBaseline);
-    requireValue("--save-baseline", baselinePath);
-    saveBaseline(baselinePath, report);
-    console.log(`Trusted baseline saved: ${baselinePath}`);
-  }
 
   console.log(printSummary(report));
   console.log(`Reports written:\n- ${writtenJson}\n- ${writtenMd}`);
@@ -582,6 +732,11 @@ function runCompare(rootPath, options) {
   const report = attachVerdict(
     scanPath(rootPath, prepareReportOptions(options, configResult, runtimeIgnorePaths))
   );
+  const fullScanSnapshot = {
+    risk: report.risk,
+    stats: { ...report.stats },
+    findings: report.findings.slice()
+  };
   const drift = compareHashes(report.hashes, baseline.hashes);
   const symlinkDrift = compareSymlinks(report.symlinks, baseline.symlinks);
   const hasBaselineManifests = Object.prototype.hasOwnProperty.call(baseline, "manifests");
@@ -674,6 +829,9 @@ function runCompare(rootPath, options) {
     report.stats.trustedFindings = 0;
   }
 
+  report.drift.trust = baseline.trust || null;
+  report.drift.riskDiff = buildRiskDiff(report, baseline, fullScanSnapshot);
+
   report.drift.highlights = buildDriftHighlights(
     report,
     manifestDrift,
@@ -700,7 +858,7 @@ function runCompare(rootPath, options) {
 
 function main() {
   const { command, target, options, unknown, errors } = parseArgs(process.argv);
-  if (!command || options.help) {
+  if (!command || options.help || command === "--help" || command === "-h") {
     printHelp();
     process.exit(0);
   }
@@ -723,7 +881,7 @@ function main() {
     process.exit(1);
   }
 
-  if (command !== "scan" && command !== "compare") {
+  if (command !== "scan" && command !== "compare" && command !== "trust") {
     console.error(`Unknown command: ${command}`);
     printHelp();
     process.exit(1);
@@ -732,7 +890,16 @@ function main() {
   const rootPath = resolveTarget(target);
   ensurePathExists("Path", rootPath);
 
-  if (command === "scan") {
+  if (command === "trust") {
+    if (options.baselinePath && !options.saveBaseline) {
+      options.saveBaseline = options.baselinePath;
+    }
+    if (!options.saveBaseline) {
+      const outDir = resolveOptionalPath(options.outDir) || path.join(process.cwd(), "reports");
+      options.saveBaseline = path.join(outDir, "baseline.json");
+    }
+    runScan(rootPath, options);
+  } else if (command === "scan") {
     runScan(rootPath, options);
   } else {
     runCompare(rootPath, options);

@@ -1,10 +1,13 @@
 {
   "name": "driftguard",
-  "version": "0.1.0",
-  "description": "Local-first integrity and drift scanner for repos and skills",
+  "version": "0.2.4",
+  "description": "Local-first security drift scanner for repos and AI agent skills with trusted baselines, file hashing, dependency drift, install-hook detection, and risky capability diffs",
   "type": "commonjs",
   "license": "MIT",
   "private": true,
+  "bin": {
+    "driftguard": "./src/cli.js"
+  },
   "engines": {
     "node": ">=20"
   },

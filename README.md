@@ -1,60 +1,88 @@
-# Driftguard
+# DriftGuard
 
-Driftguard is a dependency-light, local-first scanner for integrity and drift detection in repos and skills. It flags risky patterns, hashes files, and compares against a trusted baseline so you can answer "what changed since trust?"
+Local-first security drift scanner for repos and AI agent skills. DriftGuard tracks trusted baselines, file hashes, dependency drift, install hooks, symlinks, prompt-injection signals, and risky capability changes so you can answer one question: **"what changed since I last trusted this?"**
 
-## What It Does
-- Local-first recursive scans with ignore support
-- Risky pattern detection (shell execution, network calls, sensitive paths, prompt injection, obfuscation)
-- SHA-256 file hashes for integrity checks
-- Baseline compare to detect drift over time
-- JSON and Markdown reports
-- Optional concise summary when scanning a directory of skills
-- Prompt/documentation awareness to reduce false positives
+Scan a codebase for risky patterns, save a trusted baseline when you're satisfied, then compare later to see exactly what drifted.
 
 ## Quickstart
 
 ```bash
-node ./src/cli.js scan <path>
+# Scan a repo and review findings
+driftguard scan ./my-repo
+
+# If the findings are acceptable, trust it (saves a baseline)
+driftguard trust ./my-repo
+
+# After changes, compare against the trusted baseline
+driftguard compare ./my-repo --baseline ./reports/baseline.json
 ```
 
-Requirements:
-- Node.js >= 20
+Requires Node.js >= 20. No external dependencies.
 
-Example: repo integrity scan
+Run it directly from the repo with `node ./src/cli.js ...`.
+If you install it globally, link it locally, or publish it to npm later, you can use the shorter `driftguard ...` form.
+
+## Commands
+
+| Command | What it does |
+|---------|-------------|
+| `driftguard scan <path>` | Scan and report findings, hashes, and risk level |
+| `driftguard trust <path>` | Scan + save a trusted baseline (defaults to `./reports/baseline.json`) |
+| `driftguard compare <path> --baseline <file>` | Compare current state against a trusted baseline |
+
+### Options
+
+```
+--out <dir>             Output directory for reports (default: ./reports)
+--json <file>           JSON report path
+--md <file>             Markdown report path
+--config <file>         Config path (default: <root>/.driftguard.json)
+--save-baseline <file>  Write baseline hash file after scan
+--baseline <file>       Baseline hash file (compare/trust mode)
+--trusted-by <name>     Record who approved a trusted baseline
+--note <text>           Record an approval note on a trusted baseline
+--skills-summary        Concise summary when scanning a directory of skills
+--help, -h              Show help
+```
+
+## The Trust Workflow
+
+```
+  scan ──► review findings ──► trust (save baseline)
+                                     │
+                         (time passes, code changes)
+                                     │
+                               compare ──► "what changed since trust?"
+                                     │
+                         review drift ──► re-trust or reject
+```
+
+1. **Scan** a repo or skill to get findings, risk level, and file hashes.
+2. **Review** the findings. If acceptable, **trust** it to save a baseline.
+3. After updates, **compare** to see what drifted — new files, changed files, new capabilities, dependency changes.
+4. The verdict tells you whether to re-trust or investigate further.
+
+Trusted baselines include approval metadata: timestamp, approver, optional note,
+git commit, package version, risk summary, and finding capability summary. Example:
 
 ```bash
-node ./src/cli.js scan ./fixtures/sample-repo
+driftguard trust ./my-repo --trusted-by David --note "Reviewed before v0.2.4 publish"
 ```
 
-Example: trust + compare workflow
+## What It Detects
 
-```bash
-node ./src/cli.js scan ./skills --save-baseline ./reports/skills-baseline.json
-node ./src/cli.js compare ./skills --baseline ./reports/skills-baseline.json
-```
-
-Example: concise skills summary
-
-```bash
-node ./src/cli.js scan ./skills --skills-summary
-```
-
-## Agent Workflow (Suggested)
-1. Scan the target with `scan` to get a verdict and report artifacts.
-2. If risk is low and you trust the state, save a baseline.
-3. On subsequent runs, use `compare` to detect drift and focus on new findings since trust.
-4. Act on `VERDICT_JSON` in terminal output or the `verdict` block in `report.json`.
-
-Example: agent-friendly loop
-
-```bash
-node ./src/cli.js scan ./repo --save-baseline ./reports/baseline.json
-node ./src/cli.js compare ./repo --baseline ./reports/baseline.json
-```
+- **Shell execution** — `eval()`, `child_process`, `subprocess`, `curl | sh`, etc.
+- **Network calls** — `fetch()`, `axios`, `requests`, `curl`, webhooks
+- **Sensitive paths** — `.env`, SSH keys, config files
+- **Prompt injection** — "ignore previous instructions", override attempts, roleplay coercion
+- **Obfuscation** — base64, long hex strings
+- **Combo risks** — shell + network = RCE risk; network + sensitive = exfiltration risk
+- **Dependency drift** — added/removed deps in `package.json`, `requirements.txt`, `pyproject.toml`
+- **Install hooks** — `preinstall`, `postinstall`, `prepare` scripts in `package.json`
 
 ## Config
 
-Create a `.driftguard.json` in the root (or pass `--config <file>`):
+Create a `.driftguard.json` in the scan root (or pass `--config <file>`):
 
 ```json
 {
@@ -63,43 +91,53 @@ Create a `.driftguard.json` in the root (or pass `--config <file>`):
 }
 ```
 
-Supported keys:
-- `ignorePaths`: Paths relative to the scan root. Simple globbing is supported with `*` and `**`.
-  - Patterns without a `/` match any path segment (`node_modules/` matches nested `node_modules` directories).
-  - Trailing `/` limits the match to directories (and their contents).
+- `ignorePaths`: Relative paths with simple glob support (`*`, `**`). Patterns without `/` match any path segment.
 - `ignoreRules`: Rule IDs or prefixes with `*` wildcards.
 
 ## Output
-- Terminal summary with overall risk, severity counts, and combo risks
-- `VERDICT_JSON` line for machine parsing (status, level, exit code, next steps)
-- Compare mode highlights what changed since the trusted baseline
-- Compare only auto-trusts unchanged files when the baseline version and ignore config match the current scan
-- Baseline trust checks use a canonical root identity, not the current working directory
-- Reports/baselines written under the scan root are auto-ignored to avoid contaminating future scans
-- Symlinks are recorded (not followed) and included in drift reporting
-- `reports/report.json`
-- `reports/report.md`
 
-## Exit Codes
-- `0`: low risk and no drift detected (compare mode)
-- `1`: drift detected or medium risk
-- `2`: high or critical risk
+- **Terminal summary** with risk level, severity breakdown, and drift status
+- **Risk diff** showing baseline risk vs current drift risk, score delta, finding delta, and new capability categories
+- **`VERDICT_JSON`** line for machine parsing (status, level, exit code, next steps)
+- **`reports/report.json`** — full structured report
+- **`reports/report.md`** — human-readable Markdown report
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Low risk, no drift |
+| `1` | Medium risk or drift detected |
+| `2` | High or critical risk |
+
+## Skills Summary
+
+Scan a directory of skills (identified by `SKILL.md`) with a concise per-skill breakdown:
+
+```bash
+driftguard scan ./skills --skills-summary
+```
+
+## Notes
+
+- Zero dependencies — uses only Node.js built-ins.
+- Integrity hashes cover all files (including binaries); content scanning is limited to text.
+- Symlinks are tracked for drift but never followed.
+- Prompt files (`SKILL.md`, `SOUL.md`, `MEMORY.md`) are scanned for prompt injection only.
+- Documentation files (`.md`, `.txt`, etc.) only surface prompt-injection patterns and are marked unscored.
+- Code scanning strips string literals to reduce false positives. `package.json` scripts are scanned verbatim to catch risky install hooks.
+- Reports/baselines written under the scan root are auto-ignored to avoid contaminating future scans.
+- Extend coverage by adding rules in `src/rules.js`.
 
 ## Fixtures
+
+Test against included examples:
 
 ```bash
 node ./scripts/run-fixtures.js
 ```
 
-## Notes
-- This is a pragmatic scanner. It favors fast heuristics over deep static analysis.
-- Integrity hashes cover all files (including binaries); content scanning is limited to text and skips obvious binaries or oversized files.
-- Symlinks are never followed; their paths and targets are tracked for integrity/drift.
-- Prompt files (`SKILL.md`, `SOUL.md`, `MEMORY.md`) are scanned for prompt-injection patterns only.
-- Documentation files (`.md`, `.txt`, etc.) only surface prompt-injection patterns and are marked unscored to avoid treating docs as executable code.
-- Code scanning ignores string literals to reduce false positives from embedded examples/help text. Template literal interpolations are still scanned, and `package.json` scripts are scanned verbatim to catch risky install hooks.
-- Add more rules in `src/rules.js` to extend coverage.
-
-## Minimal References
-- `fixtures/sample-repo` contains a tiny repo to test against.
-- `fixtures/sample-skill` contains a minimal skill example.
+- `fixtures/sample-repo` — tiny repo with JS and Python
+- `fixtures/sample-skill` — minimal skill with prompt injection test
+- `fixtures/ignore-config` — demonstrates ignore rules
+- `fixtures/hash-drift` — demonstrates baseline comparison

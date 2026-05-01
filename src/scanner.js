@@ -1148,7 +1148,7 @@ function compareSymlinks(currentSymlinks, baselineSymlinks) {
   };
 }
 
-function saveBaseline(filePath, report) {
+function saveBaseline(filePath, report, trustMeta = null) {
   const rootId =
     report.rootId ||
     (report.meta && report.meta.rootId) ||
@@ -1161,11 +1161,13 @@ function saveBaseline(filePath, report) {
     rootPath: report.rootPath,
     rootId,
     rootRealPath: report.meta ? report.meta.rootPath : null,
+    trust: trustMeta,
     config: report.config || { ignorePaths: [], ignoreRules: [] },
     manifests: report.manifests || {},
     hashes: report.hashes,
     symlinks: report.symlinks || []
   };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
 }
 
